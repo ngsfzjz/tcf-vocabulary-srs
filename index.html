@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1358dc">
+  <meta name="description" content="本地离线、为 iPad 分屏优化的 TCF 法语词汇训练工具">
+  <title>Mot juste · TCF 词汇训练</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231358dc'/%3E%3Cpath d='M18 14h24a6 6 0 0 1 6 6v30H22a6 6 0 0 1-6-6V16a2 2 0 0 1 2-2Z' fill='white'/%3E%3Cpath d='M22 22h20M22 30h16M22 38h12' stroke='%231358dc' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" type="button" data-view-target="today" aria-label="返回今日训练">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span><strong>Mot juste</strong><small>TCF 词汇训练</small></span>
+      </button>
+      <div class="status-cluster">
+        <span class="local-badge" title="数据只保存在本机"><span class="status-dot"></span>本地保存</span>
+        <span id="networkStatus" class="network-status" aria-live="polite">在线</span>
+      </div>
+    </header>
+
+    <nav class="main-nav" aria-label="主要功能">
+      <button class="nav-item active" type="button" data-view-target="today" aria-current="page"><span>今日</span><small>训练</small></button>
+      <button class="nav-item" type="button" data-view-target="add"><span>极速</span><small>加词</small></button>
+      <button class="nav-item" type="button" data-view-target="library"><span>词汇</span><small>词库</small></button>
+      <button class="nav-item" type="button" data-view-target="stats"><span>学习</span><small>统计</small></button>
+      <button class="nav-item" type="button" data-view-target="settings"><span>设置</span><small>备份</small></button>
+    </nav>
+
+    <main id="mainContent" tabindex="-1">
+      <section id="view-today" class="view active" data-view="today" aria-labelledby="todayTitle">
+        <div class="page-heading">
+          <div>
+            <p id="todayDate" class="eyebrow"></p>
+            <h1 id="todayTitle">今日训练</h1>
+          </div>
+          <div class="goal-ring" aria-label="今日训练进度">
+            <strong id="progressNumber">0</strong><span id="progressTotal">/ 0</span>
+          </div>
+        </div>
+
+        <div id="trainingMix" class="mix-row" aria-label="训练词汇构成"></div>
+        <div id="trainingArea" aria-live="polite"></div>
+
+        <section class="prompt-panel" aria-labelledby="promptTitle">
+          <div class="section-head compact">
+            <div>
+              <p class="eyebrow">阅读迁移</p>
+              <h2 id="promptTitle">ChatGPT 阅读提示词</h2>
+            </div>
+            <button id="copyPromptBtn" class="secondary-btn" type="button">复制提示词</button>
+          </div>
+          <details>
+            <summary>预览今日词表与提示词</summary>
+            <pre id="promptPreview"></pre>
+          </details>
+        </section>
+      </section>
+
+      <section id="view-add" class="view" data-view="add" aria-labelledby="addTitle">
+        <form id="quickAddForm" class="quick-add" autocomplete="off">
+          <div class="quick-add-heading">
+            <p class="eyebrow">分屏快录</p>
+            <h1 id="addTitle">极速加词</h1>
+          </div>
+          <label class="field-label" for="frenchInput">法语词 / 词组</label>
+          <input id="frenchInput" name="french" class="main-input" type="text" lang="fr" autocapitalize="none" spellcheck="true" enterkeyhint="next" required placeholder="例如：prendre en compte">
+          <label class="field-label" for="chineseInput">中文释义</label>
+          <textarea id="chineseInput" name="chinese" class="main-input" rows="3" enterkeyhint="done" required placeholder="例如：考虑到，把……纳入考虑"></textarea>
+          <button id="addWordBtn" class="primary-btn jumbo" type="submit">添加</button>
+          <p id="addFeedback" class="form-feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section id="view-library" class="view" data-view="library" aria-labelledby="libraryTitle">
+        <div class="page-heading">
+          <div><p class="eyebrow">全部词汇</p><h1 id="libraryTitle">词汇库</h1></div>
+          <strong id="libraryCount" class="count-pill">0 词</strong>
+        </div>
+        <div class="library-tools">
+          <label class="search-box"><span class="sr-only">搜索词汇</span><input id="searchInput" type="search" placeholder="搜索法语或中文…"></label>
+          <label class="filter-box"><span class="sr-only">筛选熟练度</span>
+            <select id="masteryFilter">
+              <option value="all">全部熟练度</option>
+              <option value="0">熟练度 0</option>
+              <option value="1">熟练度 1</option>
+              <option value="2">熟练度 2</option>
+              <option value="3">熟练度 3</option>
+            </select>
+          </label>
+        </div>
+        <div id="libraryList" class="vocab-list"></div>
+      </section>
+
+      <section id="view-stats" class="view" data-view="stats" aria-labelledby="statsTitle">
+        <div class="page-heading"><div><p class="eyebrow">学习轨迹</p><h1 id="statsTitle">学习统计</h1></div></div>
+        <div id="statCards" class="stat-grid"></div>
+        <section class="panel" aria-labelledby="masteryTitle">
+          <div class="section-head"><div><p class="eyebrow">词汇分布</p><h2 id="masteryTitle">熟练度</h2></div></div>
+          <div id="masteryChart" class="mastery-chart"></div>
+        </section>
+        <section class="panel" aria-labelledby="activityTitle">
+          <div class="section-head"><div><p class="eyebrow">最近 7 天</p><h2 id="activityTitle">复习活动</h2></div></div>
+          <div id="activityChart" class="activity-chart"></div>
+        </section>
+      </section>
+
+      <section id="view-settings" class="view" data-view="settings" aria-labelledby="settingsTitle">
+        <div class="page-heading"><div><p class="eyebrow">偏好与数据</p><h1 id="settingsTitle">设置与备份</h1></div></div>
+        <section class="settings-card">
+          <div class="setting-row">
+            <div><strong>外观</strong><small>跟随系统，或固定浅色 / 深色</small></div>
+            <select id="themeSelect" aria-label="外观主题">
+              <option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option>
+            </select>
+          </div>
+          <div class="setting-row target-row">
+            <div><strong>每日目标</strong><small>今日训练约 25–35 词</small></div>
+            <div class="range-wrap"><input id="dailyTarget" type="range" min="25" max="35" step="1" value="30"><output id="dailyTargetOutput">30</output></div>
+          </div>
+        </section>
+
+        <section class="settings-card backup-card">
+          <div><p class="eyebrow">设备本地</p><h2>备份与迁移</h2><p class="muted">完整 JSON 包含词汇、复习记录与设置。导入前会先校验文件。</p></div>
+          <div class="button-stack">
+            <button id="exportJsonBtn" class="secondary-btn wide" type="button">导出完整 JSON 备份</button>
+            <button id="importJsonBtn" class="secondary-btn wide" type="button">从 JSON 恢复</button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden>
+            <button id="exportCsvBtn" class="secondary-btn wide" type="button">导出词汇 CSV</button>
+          </div>
+          <p id="backupStatus" class="form-feedback" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="settings-card danger-card">
+          <div><strong>清空本机数据</strong><small>将删除全部词汇、复习记录和设置</small></div>
+          <button id="resetDataBtn" class="danger-btn" type="button">清空数据</button>
+        </section>
+
+        <p class="privacy-note">所有学习数据仅保存在当前浏览器的 IndexedDB 中，不会上传到服务器。</p>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="editDialog" class="edit-dialog">
+    <form id="editForm" method="dialog">
+      <div class="dialog-head"><h2>编辑词汇</h2><button class="icon-btn" value="cancel" aria-label="关闭">×</button></div>
+      <input id="editWordId" type="hidden">
+      <label class="field-label" for="editFrench">法语词 / 词组</label>
+      <input id="editFrench" class="main-input" type="text" lang="fr" required>
+      <label class="field-label" for="editChinese">中文释义</label>
+      <textarea id="editChinese" class="main-input" rows="3" required></textarea>
+      <div class="dialog-actions"><button class="secondary-btn" value="cancel" type="button" id="cancelEditBtn">取消</button><button class="primary-btn" type="submit">保存</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>
