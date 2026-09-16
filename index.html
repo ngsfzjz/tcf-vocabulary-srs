@@ -18,7 +18,7 @@
         <span><strong>Mot juste</strong><small>TCF 词汇训练</small></span>
       </button>
       <div class="status-cluster">
-        <span class="local-badge" title="数据只保存在本机"><span class="status-dot"></span>本地保存</span>
+        <button id="syncStatusBtn" class="sync-badge" type="button" title="打开同步设置" aria-live="polite">☁️ 未登录</button>
         <span id="networkStatus" class="network-status" aria-live="polite">在线</span>
       </div>
     </header>
@@ -111,6 +111,32 @@
 
       <section id="view-settings" class="view" data-view="settings" aria-labelledby="settingsTitle">
         <div class="page-heading"><div><p class="eyebrow">偏好与数据</p><h1 id="settingsTitle">设置与备份</h1></div></div>
+        <section class="settings-card account-card" aria-labelledby="accountTitle">
+          <div>
+            <p class="eyebrow">多设备同步</p>
+            <h2 id="accountTitle">Supabase 账号</h2>
+            <p class="muted">电脑和 iPad 登录同一邮箱后，会合并词汇与复习历史。离线时继续保存在本机。</p>
+          </div>
+          <form id="authForm" class="auth-form" autocomplete="on">
+            <label class="field-label" for="authEmail">邮箱</label>
+            <input id="authEmail" class="compact-input" type="email" autocomplete="email" inputmode="email" required placeholder="name@example.com">
+            <label class="field-label" for="authPassword">密码</label>
+            <input id="authPassword" class="compact-input" type="password" autocomplete="current-password" minlength="6" required placeholder="至少 6 位">
+            <div class="auth-actions">
+              <button id="loginBtn" class="primary-btn" type="submit">登录</button>
+              <button id="registerBtn" class="secondary-btn" type="button">注册</button>
+            </div>
+          </form>
+          <div id="signedInPanel" class="signed-in-panel" hidden>
+            <div><strong id="signedInEmail"></strong><small id="lastSyncText">尚未同步</small></div>
+            <div class="auth-actions">
+              <button id="syncNowSettingsBtn" class="primary-btn" type="button">立即同步</button>
+              <button id="logoutBtn" class="secondary-btn" type="button">退出</button>
+            </div>
+          </div>
+          <p id="authStatus" class="form-feedback" role="status" aria-live="polite"></p>
+        </section>
+
         <section class="settings-card">
           <div class="setting-row">
             <div><strong>外观</strong><small>跟随系统，或固定浅色 / 深色</small></div>
@@ -140,7 +166,7 @@
           <button id="resetDataBtn" class="danger-btn" type="button">清空数据</button>
         </section>
 
-        <p class="privacy-note">所有学习数据仅保存在当前浏览器的 IndexedDB 中，不会上传到服务器。</p>
+        <p class="privacy-note">IndexedDB 始终保留本机缓存；登录后，词汇与复习记录会同步到你的 Supabase 账号。</p>
       </section>
     </main>
   </div>
@@ -158,6 +184,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="supabase-config.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="sync.js" defer></script>
 </body>
 </html>

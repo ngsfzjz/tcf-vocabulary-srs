@@ -1,7 +1,7 @@
 {
   "name": "Mot juste · TCF 词汇训练",
   "short_name": "Mot juste",
-  "description": "为 iPad 分屏优化的本地离线 TCF 法语词汇训练工具",
+  "description": "为 iPad 分屏优化、支持离线与多设备同步的 TCF 法语词汇训练工具",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",

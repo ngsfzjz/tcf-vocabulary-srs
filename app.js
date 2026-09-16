@@ -1,7 +1,7 @@
 "use strict";
 
 const DB_NAME = "mot-juste-tcf";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 const STORE_WORDS = "words";
 const STORE_REVIEWS = "reviews";
 const STORE_SETTINGS = "settings";
@@ -39,6 +39,7 @@ async function init() {
         showToast("离线组件将在下次访问时重试");
       });
     }
+    document.dispatchEvent(new CustomEvent("motjuste:ready"));
   } catch (error) {
     console.error(error);
     $("#trainingArea").innerHTML = emptyState("无法打开本地数据", "请确认浏览器允许此网站保存数据，然后刷新页面。", "重试", "location.reload()", "!");
@@ -48,8 +49,9 @@ async function init() {
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
+      const transaction = request.transaction;
       if (!database.objectStoreNames.contains(STORE_WORDS)) {
         const words = database.createObjectStore(STORE_WORDS, { keyPath: "id" });
         words.createIndex("normalized", "normalized", { unique: true });
@@ -57,12 +59,41 @@ function openDatabase() {
         words.createIndex("nextReviewAt", "nextReviewAt", { unique: false });
       }
       if (!database.objectStoreNames.contains(STORE_REVIEWS)) {
-        const reviews = database.createObjectStore(STORE_REVIEWS, { keyPath: "id", autoIncrement: true });
+        const reviews = database.createObjectStore(STORE_REVIEWS, { keyPath: "id" });
         reviews.createIndex("wordId", "wordId", { unique: false });
         reviews.createIndex("reviewedDate", "reviewedDate", { unique: false });
       }
       if (!database.objectStoreNames.contains(STORE_SETTINGS)) {
         database.createObjectStore(STORE_SETTINGS, { keyPath: "key" });
+      }
+      if (event.oldVersion < 2) {
+        const wordsStore = transaction.objectStore(STORE_WORDS);
+        wordsStore.openCursor().onsuccess = (cursorEvent) => {
+          const cursor = cursorEvent.target.result;
+          if (!cursor) return;
+          const word = cursor.value;
+          cursor.update({
+            ...word,
+            deletedAt: word.deletedAt || null,
+            syncState: "pending",
+          });
+          cursor.continue();
+        };
+      }
+      if (event.oldVersion > 0 && event.oldVersion < 3) {
+        const legacyReviews = transaction.objectStore(STORE_REVIEWS);
+        const readReviews = legacyReviews.getAll();
+        readReviews.onsuccess = () => {
+          database.deleteObjectStore(STORE_REVIEWS);
+          const reviews = database.createObjectStore(STORE_REVIEWS, { keyPath: "id" });
+          reviews.createIndex("wordId", "wordId", { unique: false });
+          reviews.createIndex("reviewedDate", "reviewedDate", { unique: false });
+          readReviews.result.forEach((review) => reviews.put({
+            ...review,
+            id: typeof review.id === "string" ? review.id : makeId(),
+            syncState: review.syncState || "pending",
+          }));
+        };
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -120,6 +151,15 @@ async function saveSetting(key, value) {
   await putRecord(STORE_SETTINGS, { key, value });
 }
 
+async function deleteSetting(key) {
+  delete appState.settings[key];
+  await deleteRecord(STORE_SETTINGS, key);
+}
+
+function activeWords() {
+  return appState.words.filter((word) => !word.deletedAt);
+}
+
 function localDate(input = new Date()) {
   const date = input instanceof Date ? input : new Date(input);
   const year = date.getFullYear();
@@ -133,7 +173,12 @@ function normalizeFrench(value) {
 }
 
 function makeId() {
-  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
 }
 
 function errorRate(word) {
@@ -162,7 +207,7 @@ async function ensureTodaySession(forceRebuild = false) {
   const today = localDate();
   const stored = appState.settings.todaySession;
   if (!forceRebuild && stored?.date === today && Array.isArray(stored.wordIds)) {
-    const validIds = new Set(appState.words.map((word) => word.id));
+    const validIds = new Set(activeWords().map((word) => word.id));
     stored.wordIds = stored.wordIds.filter((id) => validIds.has(id));
     stored.completedIds = (stored.completedIds || []).filter((id) => validIds.has(id));
     for (const key of Object.keys(CATEGORY_LABELS)) {
@@ -171,13 +216,14 @@ async function ensureTodaySession(forceRebuild = false) {
     appState.session = stored;
     return stored;
   }
-  const session = buildTodaySession(appState.words, Number(appState.settings.dailyTarget) || 30);
+  const session = buildTodaySession(activeWords(), Number(appState.settings.dailyTarget) || 30);
   appState.session = session;
   await saveSetting("todaySession", session);
   return session;
 }
 
 function buildTodaySession(words, target) {
+  words = words.filter((word) => !word.deletedAt);
   const today = localDate();
   const now = Date.now();
   const selected = [];
@@ -210,27 +256,33 @@ async function addWord(french, chinese) {
   if (!term || !translation) throw new Error("请填写法语词和中文释义");
   const normalized = normalizeFrench(term);
   const duplicate = appState.words.find((word) => word.normalized === normalized);
-  if (duplicate) throw new Error(`“${duplicate.term}” 已在词汇库中`);
+  if (duplicate && !duplicate.deletedAt) throw new Error(`“${duplicate.term}” 已在词汇库中`);
   const now = new Date();
   const word = {
-    id: makeId(),
+    ...(duplicate || {}),
+    id: duplicate?.id || makeId(),
     term,
     translation,
     normalized,
-    createdAt: now.toISOString(),
-    createdDate: localDate(now),
+    createdAt: duplicate?.createdAt || now.toISOString(),
+    createdDate: duplicate?.createdDate || localDate(now),
     updatedAt: now.toISOString(),
-    mastery: 0,
-    reviewCount: 0,
-    errorCount: 0,
-    streak: 0,
-    lastResult: null,
-    lastReviewedAt: null,
-    nextReviewAt: null,
+    deletedAt: null,
+    syncState: "pending",
+    mastery: duplicate?.mastery || 0,
+    reviewCount: duplicate?.reviewCount || 0,
+    errorCount: duplicate?.errorCount || 0,
+    streak: duplicate?.streak || 0,
+    lastResult: duplicate?.lastResult || null,
+    lastReviewedAt: duplicate?.lastReviewedAt || null,
+    nextReviewAt: duplicate?.nextReviewAt || null,
   };
   await putRecord(STORE_WORDS, word);
-  appState.words.push(word);
+  appState.words = duplicate
+    ? appState.words.map((item) => item.id === duplicate.id ? word : item)
+    : [...appState.words, word];
   await addWordToTodaySession(word.id);
+  window.MotJusteSync?.queue();
   return word;
 }
 
@@ -244,7 +296,7 @@ async function addWordToTodaySession(wordId) {
 function getCurrentTrainingWord() {
   const completed = new Set(appState.session?.completedIds || []);
   const id = appState.session?.wordIds.find((wordId) => !completed.has(wordId));
-  return appState.words.find((word) => word.id === id) || null;
+  return appState.words.find((word) => word.id === id && !word.deletedAt) || null;
 }
 
 function categoryForWord(wordId) {
@@ -278,7 +330,7 @@ function getSrsUpdate(word, result, reviewedAt = new Date()) {
     lastResult: result,
     lastReviewedAt: reviewedAt.toISOString(),
     nextReviewAt: addDays(reviewedAt, intervalDays).toISOString(),
-    updatedAt: reviewedAt.toISOString(),
+    updatedAt: word.updatedAt || reviewedAt.toISOString(),
     intervalDays,
   };
 }
@@ -289,6 +341,7 @@ async function recordAnswer(result) {
   const reviewedAt = new Date();
   const updated = getSrsUpdate(word, result, reviewedAt);
   const review = {
+    id: makeId(),
     wordId: word.id,
     term: word.term,
     result,
@@ -297,21 +350,21 @@ async function recordAnswer(result) {
     previousMastery: word.mastery,
     newMastery: updated.mastery,
     intervalDays: updated.intervalDays,
+    syncState: "pending",
   };
   delete updated.intervalDays;
   const transaction = db.transaction([STORE_WORDS, STORE_REVIEWS, STORE_SETTINGS], "readwrite");
   transaction.objectStore(STORE_WORDS).put(updated);
-  const reviewIdRequest = transaction.objectStore(STORE_REVIEWS).add(review);
+  transaction.objectStore(STORE_REVIEWS).put(review);
   if (!appState.session.completedIds.includes(word.id)) appState.session.completedIds.push(word.id);
   transaction.objectStore(STORE_SETTINGS).put({ key: "todaySession", value: appState.session });
-  const reviewId = await requestToPromise(reviewIdRequest);
   await transactionDone(transaction);
-  review.id = reviewId;
   appState.words = appState.words.map((item) => item.id === word.id ? updated : item);
   appState.reviews.push(review);
   appState.settings.todaySession = appState.session;
   appState.revealAnswer = false;
   renderToday();
+  window.MotJusteSync?.queue();
   showToast(`${RESULT_LABELS[result]} · ${review.intervalDays} 天后再见`);
 }
 
@@ -320,6 +373,7 @@ function renderAll() {
   renderLibrary();
   renderStats();
   renderSettings();
+  window.MotJusteSync?.render?.();
 }
 
 function renderToday() {
@@ -372,7 +426,7 @@ function emptyState(title, text, buttonText, action, icon) {
 function buildChatGptPrompt() {
   const linesFor = (key) => {
     const ids = appState.session?.categories?.[key] || [];
-    const items = ids.map((id) => appState.words.find((word) => word.id === id)).filter(Boolean);
+    const items = ids.map((id) => appState.words.find((word) => word.id === id && !word.deletedAt)).filter(Boolean);
     return items.length ? items.map((word) => `${word.term}（${word.translation}）`).join("；") : "无";
   };
   return `你是一位熟悉 TCF 的法语教师。请使用下面的今日词汇，生成 5 篇难度为 TCF B1+/B2 的法语短阅读。\n\n要求：\n1. 每篇 80–120 个法语词；\n2. 主题彼此不同，语境自然；\n3. 尽量覆盖全部词汇，但不要生硬堆砌；\n4. 每篇后附 2 道法语理解题；\n5. 最后给出理解题答案，不要逐句翻译正文。\n\n【今日新词】\n${linesFor("new")}\n\n【到期词】\n${linesFor("due")}\n\n【薄弱词】\n${linesFor("weak")}\n\n【熟练复现词】\n${linesFor("mature")}`;
@@ -381,30 +435,32 @@ function buildChatGptPrompt() {
 function renderLibrary() {
   const query = normalizeFrench($("#searchInput")?.value || "");
   const mastery = $("#masteryFilter")?.value || "all";
-  const filtered = [...appState.words]
+  const visibleWords = activeWords();
+  const filtered = [...visibleWords]
     .filter((word) => !query || word.normalized.includes(query) || word.translation.toLocaleLowerCase("zh-CN").includes(query))
     .filter((word) => mastery === "all" || String(word.mastery) === mastery)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  $("#libraryCount").textContent = `${appState.words.length} 词`;
+  $("#libraryCount").textContent = `${visibleWords.length} 词`;
   $("#libraryList").innerHTML = filtered.length ? filtered.map((word) => `
     <article class="vocab-card" data-word-id="${word.id}">
       <div class="vocab-main"><div><h2 lang="fr">${escapeHtml(word.term)}</h2><p>${escapeHtml(word.translation)}</p></div><span class="mastery-badge" title="熟练度">L${word.mastery}</span></div>
       <div class="vocab-meta"><span>复习 ${word.reviewCount} 次</span><span>错误率 ${Math.round(errorRate(word) * 100)}%</span><span>连对 ${word.streak}</span><span>${formatDue(word.nextReviewAt)}</span><span>添加于 ${formatDateTime(word.createdAt)}</span></div>
       <div class="vocab-actions"><button class="text-btn" type="button" data-edit-id="${word.id}">编辑</button><button class="text-btn delete" type="button" data-delete-id="${word.id}">删除</button></div>
-    </article>`).join("") : `<div class="empty-state"><div class="empty-icon">⌕</div><h2>没有找到词汇</h2><p>${appState.words.length ? "换个关键词或筛选条件试试。" : "用极速加词建立你的第一个词条。"}</p></div>`;
+    </article>`).join("") : `<div class="empty-state"><div class="empty-icon">⌕</div><h2>没有找到词汇</h2><p>${visibleWords.length ? "换个关键词或筛选条件试试。" : "用极速加词建立你的第一个词条。"}</p></div>`;
   $$('[data-edit-id]', $("#libraryList")).forEach((button) => button.addEventListener("click", () => openEditDialog(button.dataset.editId)));
   $$('[data-delete-id]', $("#libraryList")).forEach((button) => button.addEventListener("click", () => removeWord(button.dataset.deleteId)));
 }
 
 function renderStats() {
   const today = localDate();
-  const todayAdded = appState.words.filter((word) => word.createdDate === today).length;
+  const visibleWords = activeWords();
+  const todayAdded = visibleWords.filter((word) => word.createdDate === today).length;
   const todayReviewed = appState.reviews.filter((review) => review.reviewedDate === today).length;
   const correctCount = appState.reviews.filter((review) => review.result === "correct").length;
   const accuracy = appState.reviews.length ? Math.round(correctCount / appState.reviews.length * 100) : 0;
-  const stats = [["词汇总数", appState.words.length], ["今日新增", todayAdded], ["今日复习", todayReviewed], ["自动认出率", `${accuracy}%`]];
+  const stats = [["词汇总数", visibleWords.length], ["今日新增", todayAdded], ["今日复习", todayReviewed], ["自动认出率", `${accuracy}%`]];
   $("#statCards").innerHTML = stats.map(([label, value]) => `<div class="stat-card"><span>${label}</span><strong>${value}</strong></div>`).join("");
-  const masteryCounts = [0, 1, 2, 3].map((level) => appState.words.filter((word) => word.mastery === level).length);
+  const masteryCounts = [0, 1, 2, 3].map((level) => visibleWords.filter((word) => word.mastery === level).length);
   const max = Math.max(1, ...masteryCounts);
   $("#masteryChart").innerHTML = masteryCounts.map((count, level) => `<div class="mastery-row"><span>熟练度 ${level}</span><div class="bar-track"><div class="bar-fill" style="width:${count / max * 100}%"></div></div><strong>${count}</strong></div>`).join("");
   const days = Array.from({ length: 7 }, (_, index) => {
@@ -505,30 +561,31 @@ async function saveEditedWord(event) {
   const translation = $("#editChinese").value.trim().replace(/\s+/g, " ");
   const normalized = normalizeFrench(term);
   if (!term || !translation) return showToast("请填写完整");
-  if (appState.words.some((item) => item.id !== id && item.normalized === normalized)) return showToast("这个词已经存在");
-  const updated = { ...word, term, translation, normalized, updatedAt: new Date().toISOString() };
+  if (appState.words.some((item) => item.id !== id && !item.deletedAt && item.normalized === normalized)) return showToast("这个词已经存在");
+  const updated = { ...word, term, translation, normalized, updatedAt: new Date().toISOString(), syncState: "pending" };
   await putRecord(STORE_WORDS, updated);
   appState.words = appState.words.map((item) => item.id === id ? updated : item);
   $("#editDialog").close();
   renderAll();
+  window.MotJusteSync?.queue();
   showToast("词汇已更新");
 }
 
 async function removeWord(id) {
   const word = appState.words.find((item) => item.id === id);
-  if (!word || !confirm(`删除“${word.term}”？相关复习记录也会删除。`)) return;
-  const relatedReviews = appState.reviews.filter((review) => review.wordId === id);
-  const transaction = db.transaction([STORE_WORDS, STORE_REVIEWS, STORE_SETTINGS], "readwrite");
-  transaction.objectStore(STORE_WORDS).delete(id);
-  relatedReviews.forEach((review) => transaction.objectStore(STORE_REVIEWS).delete(review.id));
+  if (!word || !confirm(`删除“${word.term}”？复习历史会保留，并向其他设备同步删除状态。`)) return;
+  const now = new Date().toISOString();
+  const deleted = { ...word, deletedAt: now, updatedAt: now, syncState: "pending" };
+  const transaction = db.transaction([STORE_WORDS, STORE_SETTINGS], "readwrite");
+  transaction.objectStore(STORE_WORDS).put(deleted);
   appState.session.wordIds = appState.session.wordIds.filter((wordId) => wordId !== id);
   appState.session.completedIds = appState.session.completedIds.filter((wordId) => wordId !== id);
   Object.keys(CATEGORY_LABELS).forEach((key) => { appState.session.categories[key] = appState.session.categories[key].filter((wordId) => wordId !== id); });
   transaction.objectStore(STORE_SETTINGS).put({ key: "todaySession", value: appState.session });
   await transactionDone(transaction);
-  appState.words = appState.words.filter((item) => item.id !== id);
-  appState.reviews = appState.reviews.filter((review) => review.wordId !== id);
+  appState.words = appState.words.map((item) => item.id === id ? deleted : item);
   renderAll();
+  window.MotJusteSync?.queue();
   showToast("词汇已删除");
 }
 
@@ -567,6 +624,9 @@ function downloadFile(filename, content, type) {
 }
 
 function exportJson() {
+  const portableSettings = Object.entries(appState.settings)
+    .filter(([key]) => !["supabaseSession", "syncOwnerUserId", "lastSyncAt"].includes(key))
+    .map(([key, value]) => ({ key, value }));
   const backup = {
     format: "mot-juste-backup",
     version: 1,
@@ -574,7 +634,7 @@ function exportJson() {
     data: {
       words: appState.words,
       reviews: appState.reviews,
-      settings: Object.entries(appState.settings).map(([key, value]) => ({ key, value })),
+      settings: portableSettings,
     },
   };
   downloadFile(`mot-juste-backup-${localDate()}.json`, JSON.stringify(backup, null, 2), "application/json");
@@ -597,8 +657,18 @@ async function importJson(event) {
       if (normalizedSet.has(normalized)) throw new Error("备份中存在重复词汇");
       normalizedSet.add(normalized);
       word.normalized = normalized;
+      word.deletedAt = word.deletedAt || null;
+      word.syncState = "pending";
     }
-    if (!confirm(`将用备份中的 ${parsed.data.words.length} 个词覆盖当前本机数据，继续吗？`)) return;
+    parsed.data.reviews = parsed.data.reviews.map((review) => ({
+      ...review,
+      id: typeof review.id === "string" ? review.id : makeId(),
+      syncState: "pending",
+    }));
+    if (!confirm(`将用备份中的 ${parsed.data.words.length} 个词覆盖当前本机缓存，继续吗？云端数据会在下次同步时安全合并。`)) return;
+    const protectedSettings = ["supabaseSession", "syncOwnerUserId", "lastSyncAt"]
+      .filter((key) => appState.settings[key] !== undefined)
+      .map((key) => ({ key, value: appState.settings[key] }));
     const transaction = db.transaction([STORE_WORDS, STORE_REVIEWS, STORE_SETTINGS], "readwrite");
     const wordsStore = transaction.objectStore(STORE_WORDS);
     const reviewsStore = transaction.objectStore(STORE_REVIEWS);
@@ -606,13 +676,15 @@ async function importJson(event) {
     wordsStore.clear(); reviewsStore.clear(); settingsStore.clear();
     parsed.data.words.forEach((row) => wordsStore.put(row));
     parsed.data.reviews.forEach((row) => reviewsStore.put(row));
-    parsed.data.settings.forEach((row) => { if (row?.key) settingsStore.put(row); });
+    parsed.data.settings.forEach((row) => { if (row?.key && !["supabaseSession", "syncOwnerUserId", "lastSyncAt"].includes(row.key)) settingsStore.put(row); });
+    protectedSettings.forEach((row) => settingsStore.put(row));
     await transactionDone(transaction);
     await loadAllData();
     await ensureTodaySession();
     applyTheme(appState.settings.theme || "system");
     renderAll();
-    $("#backupStatus").textContent = `恢复完成 · ${appState.words.length} 个词`;
+    $("#backupStatus").textContent = `恢复完成 · ${activeWords().length} 个词`;
+    window.MotJusteSync?.queue();
     showToast("JSON 备份已恢复");
   } catch (error) {
     $("#backupStatus").textContent = error.message;
@@ -626,10 +698,10 @@ function csvCell(value) {
 
 function exportCsv() {
   const headers = ["法语词/词组", "中文释义", "添加时间", "熟练度", "复习次数", "错误次数", "错误率", "连续正确", "最近结果", "上次复习", "下次复习"];
-  const rows = appState.words.map((word) => [word.term, word.translation, word.createdAt, word.mastery, word.reviewCount, word.errorCount, `${Math.round(errorRate(word) * 100)}%`, word.streak, word.lastResult ? RESULT_LABELS[word.lastResult] : "", word.lastReviewedAt || "", word.nextReviewAt || ""]);
+  const rows = activeWords().map((word) => [word.term, word.translation, word.createdAt, word.mastery, word.reviewCount, word.errorCount, `${Math.round(errorRate(word) * 100)}%`, word.streak, word.lastResult ? RESULT_LABELS[word.lastResult] : "", word.lastReviewedAt || "", word.nextReviewAt || ""]);
   const csv = "\ufeff" + [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
   downloadFile(`mot-juste-vocabulary-${localDate()}.csv`, csv, "text/csv;charset=utf-8");
-  $("#backupStatus").textContent = `CSV 已导出 · ${appState.words.length} 个词`;
+  $("#backupStatus").textContent = `CSV 已导出 · ${activeWords().length} 个词`;
 }
 
 async function resetAllData() {
@@ -643,6 +715,7 @@ async function resetAllData() {
   await ensureTodaySession(true);
   applyTheme("system");
   renderAll();
+  window.MotJusteSync?.onLocalReset?.();
   showToast("本机数据已清空");
 }
 
@@ -650,6 +723,7 @@ function updateNetworkStatus() {
   const online = navigator.onLine;
   $("#networkStatus").textContent = online ? "在线" : "离线可用";
   $("#networkStatus").title = online ? "网络正常" : "应用和数据仍可离线使用";
+  window.MotJusteSync?.networkChanged?.(online);
 }
 
 function showToast(message) {
@@ -663,6 +737,87 @@ function showToast(message) {
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 }
+
+async function refreshTodaySessionAfterSync() {
+  const previous = appState.session;
+  const rebuilt = buildTodaySession(activeWords(), Number(appState.settings.dailyTarget) || 30);
+  const validIds = new Set(activeWords().map((word) => word.id));
+  const completedIds = (previous?.completedIds || []).filter((id) => validIds.has(id));
+  for (const id of completedIds) {
+    if (!rebuilt.wordIds.includes(id)) {
+      rebuilt.wordIds.push(id);
+      const oldCategory = Object.keys(CATEGORY_LABELS).find((key) => previous?.categories?.[key]?.includes(id)) || "weak";
+      rebuilt.categories[oldCategory].push(id);
+    }
+  }
+  rebuilt.completedIds = completedIds;
+  appState.session = rebuilt;
+  await saveSetting("todaySession", rebuilt);
+}
+
+async function commitSyncedData(words, reviews) {
+  const [currentWords, currentReviews] = await Promise.all([getAll(STORE_WORDS), getAll(STORE_REVIEWS)]);
+  const wordMap = new Map(words.map((word) => [word.id, word]));
+  const incomingByNormalized = new Map(words.map((word) => [word.normalized, word]));
+  const concurrentIdAliases = new Map();
+  for (const current of currentWords) {
+    const incoming = wordMap.get(current.id);
+    const canonical = incomingByNormalized.get(current.normalized);
+    if (!incoming && canonical) {
+      concurrentIdAliases.set(current.id, canonical.id);
+      if (current.syncState === "pending" && String(current.updatedAt || "") > String(canonical.updatedAt || "")) {
+        const canonicalized = { ...current, id: canonical.id };
+        wordMap.set(canonical.id, canonicalized);
+        incomingByNormalized.set(current.normalized, canonicalized);
+      }
+      continue;
+    }
+    if (!incoming || (current.syncState === "pending" && String(current.updatedAt || "") > String(incoming.updatedAt || ""))) {
+      wordMap.set(current.id, current);
+    }
+  }
+  const reviewMap = new Map(reviews.map((review) => [review.id, review]));
+  currentReviews.forEach((review) => {
+    if (!reviewMap.has(review.id)) reviewMap.set(review.id, {
+      ...review,
+      wordId: concurrentIdAliases.get(review.wordId) || review.wordId,
+    });
+  });
+  const finalWords = [...wordMap.values()];
+  const finalReviews = [...reviewMap.values()];
+  const transaction = db.transaction([STORE_WORDS, STORE_REVIEWS], "readwrite");
+  const wordsStore = transaction.objectStore(STORE_WORDS);
+  const reviewsStore = transaction.objectStore(STORE_REVIEWS);
+  wordsStore.clear();
+  reviewsStore.clear();
+  finalWords.forEach((word) => wordsStore.put(word));
+  finalReviews.forEach((review) => reviewsStore.put(review));
+  await transactionDone(transaction);
+  appState.words = finalWords;
+  appState.reviews = finalReviews;
+  await refreshTodaySessionAfterSync();
+  renderAll();
+}
+
+window.MotJusteApp = {
+  getState: () => appState,
+  getDb: () => db,
+  stores: { words: STORE_WORDS, reviews: STORE_REVIEWS, settings: STORE_SETTINGS },
+  activeWords,
+  getAll,
+  putRecord,
+  saveSetting,
+  deleteSetting,
+  transactionDone,
+  commitSyncedData,
+  refreshTodaySessionAfterSync,
+  getSrsUpdate,
+  normalizeFrench,
+  localDate,
+  makeId,
+  renderAll,
+  showToast,
+};
 
 function registerWebMcpTools() {
   const context = document.modelContext;
