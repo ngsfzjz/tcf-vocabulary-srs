@@ -1,8 +1,8 @@
 # 自动查询 Edge Function 部署
 
-本项目使用 OpenAI Responses API。前端只有 Supabase Publishable Key；LLM API Key **只能**设置为 Supabase Edge Function Secret，不要写进 `supabase-config.js`、仓库文件或 JSON 备份。
+本项目使用 DeepSeek Responses API，Base URL 为 `https://api.deepseek.com`，模型固定为 `deepseek-flash`（DeepSeek V4.1 Flash）。前端只有 Supabase Publishable Key；LLM API Key **只能**设置为 Supabase Edge Function Secret，不要写进 `supabase-config.js`、仓库文件或 JSON 备份。
 
-1. 在 Supabase 控制台选择项目 `guhnpxwgdoofontinxap`，打开 **Edge Functions → Secrets**，新增 `OPENAI_API_KEY`，值填写你的 OpenAI API Key。可选新增 `OPENAI_MODEL`，默认 `gpt-4o-mini`。
+1. 在 Supabase 控制台选择项目 `guhnpxwgdoofontinxap`，打开 **Edge Functions → Secrets**，新增 `DEEPSEEK_API_KEY`，值填写你的 DeepSeek API Key。无需设置模型 Secret。
 2. 使用有该项目部署权限的 Supabase CLI 登录后，在仓库根目录执行：
 
    ```sh
