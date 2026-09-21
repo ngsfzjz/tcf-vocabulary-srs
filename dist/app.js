@@ -18,6 +18,7 @@ let appState = {
   revealAnswer: false,
 };
 let toastTimer;
+let lookupSequence = 0;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -481,8 +482,26 @@ function renderSettings() {
 function bindEvents() {
   $$('[data-view-target]').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.viewTarget)));
   $("#quickAddForm").addEventListener("submit", handleQuickAdd);
+  $("#frenchInput").addEventListener("input", () => {
+    lookupSequence += 1;
+    $("#lookupPreview").hidden = true;
+    $("#lookupBtn").disabled = false;
+    $("#lookupBtn").textContent = "自动查询";
+    $("#addFeedback").textContent = "";
+  });
+  $("#confirmAddBtn").addEventListener("click", confirmQuickAdd);
+  $("#editLookupBtn").addEventListener("click", () => $("#chineseInput").focus());
+  $("#retryLookupBtn").addEventListener("click", handleQuickAdd);
+  $("#manualAddBtn").addEventListener("click", () => {
+    if (!$("#frenchInput").value.trim()) return $("#frenchInput").focus();
+    lookupSequence += 1;
+    $("#lookupBtn").disabled = false;
+    $("#lookupBtn").textContent = "自动查询";
+    showLookupPreview($("#frenchInput").value, null);
+    $("#chineseInput").focus();
+  });
   $("#chineseInput").addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") $("#quickAddForm").requestSubmit();
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") confirmQuickAdd();
   });
   $("#searchInput").addEventListener("input", renderLibrary);
   $("#masteryFilter").addEventListener("change", renderLibrary);
@@ -526,20 +545,76 @@ function switchView(view) {
 }
 window.switchView = switchView;
 
+function showLookupPreview(term, result) {
+  $("#lookupPreview").hidden = false;
+  $("#lookupTerm").textContent = term.trim();
+  $("#chineseInput").value = result?.translation || "";
+  $("#lookupDetails").hidden = !result;
+  $("#lookupPartOfSpeech").textContent = result?.partOfSpeech || "";
+  $("#lookupCollocation").textContent = result?.collocation || "";
+}
+
 async function handleQuickAdd(event) {
-  event.preventDefault();
+  event?.preventDefault?.();
   const feedback = $("#addFeedback");
   feedback.className = "form-feedback";
+  const term = $("#frenchInput").value.normalize("NFC").trim().replace(/\s+/g, " ");
+  if (!term) return;
+  const duplicate = appState.words.find((word) => !word.deletedAt && word.normalized === normalizeFrench(term));
+  if (duplicate) {
+    feedback.textContent = `“${duplicate.term}” 已在词汇库中`;
+    feedback.classList.add("error");
+    return;
+  }
+  const sequence = ++lookupSequence;
+  $("#lookupPreview").hidden = true;
+  $("#lookupBtn").disabled = true;
+  $("#lookupBtn").textContent = "查询中…";
+  feedback.textContent = "正在查询中文释义、词性和常见搭配…";
   try {
-    const word = await addWord($("#frenchInput").value, $("#chineseInput").value);
+    if (!window.MotJusteSync?.lookupFrench) throw new Error("查询服务尚未就绪");
+    const result = await window.MotJusteSync.lookupFrench(term);
+    if (sequence !== lookupSequence) return;
+    showLookupPreview(term, result);
+    feedback.textContent = "请核对结果，可手动修改；确认前不会保存。";
+    feedback.classList.add("success");
+  } catch (error) {
+    if (sequence !== lookupSequence) return;
+    showLookupPreview(term, null);
+    feedback.textContent = `${error.message || "查询失败"}；请手动填写中文释义后确认添加。`;
+    feedback.classList.add("error");
+  } finally {
+    if (sequence === lookupSequence) {
+      $("#lookupBtn").disabled = false;
+      $("#lookupBtn").textContent = "自动查询";
+    }
+  }
+}
+
+async function confirmQuickAdd() {
+  const feedback = $("#addFeedback");
+  feedback.className = "form-feedback";
+  const term = $("#frenchInput").value.normalize("NFC").trim().replace(/\s+/g, " ");
+  if ($("#lookupPreview").hidden || $("#lookupTerm").textContent !== term) {
+    feedback.textContent = "请先查询或选择手动填写，再确认添加。";
+    feedback.classList.add("error");
+    return;
+  }
+  $("#confirmAddBtn").disabled = true;
+  try {
+    const word = await addWord(term, $("#chineseInput").value);
     feedback.textContent = `已添加 · ${formatDateTime(word.createdAt)} · 已加入今日新词`;
     feedback.classList.add("success");
-    event.target.reset();
+    $("#quickAddForm").reset();
+    $("#lookupPreview").hidden = true;
+    lookupSequence += 1;
     $("#frenchInput").focus();
     renderAll();
   } catch (error) {
     feedback.textContent = error.message;
     feedback.classList.add("error");
+  } finally {
+    $("#confirmAddBtn").disabled = false;
   }
 }
 

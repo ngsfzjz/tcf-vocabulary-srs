@@ -45,7 +45,7 @@
     if (!response.ok) {
       let detail = {};
       try { detail = await response.json(); } catch { detail = { message: await response.text().catch(() => "") }; }
-      const error = new Error(detail.msg || detail.message || detail.error_description || detail.details || `请求失败 (${response.status})`);
+      const error = new Error(detail.msg || detail.message || detail.error_description || detail.details || (typeof detail.error === "string" ? detail.error : "") || `请求失败 (${response.status})`);
       error.status = response.status;
       error.code = detail.code;
       throw error;
@@ -412,6 +412,35 @@
     return state.syncPromise;
   }
 
+  async function lookupFrench(term) {
+    if (!navigator.onLine) throw new Error("当前离线");
+    if (!state.session) throw new Error("请先在“设置与备份”中登录，同步账号登录后才可自动查询");
+    await ensureFreshSession();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+      const result = await apiFetch("/functions/v1/lookup-french", {
+        method: "POST",
+        body: JSON.stringify({ term }),
+        signal: controller.signal,
+      });
+      if (![result?.translation, result?.partOfSpeech, result?.collocation].every((value) => typeof value === "string" && value.trim())) {
+        throw new Error("查询结果不完整");
+      }
+      return {
+        translation: result.translation.trim(),
+        partOfSpeech: result.partOfSpeech.trim(),
+        collocation: result.collocation.trim(),
+      };
+    } catch (error) {
+      if (error.name === "AbortError") throw new Error("查询超时");
+      if (error instanceof TypeError) throw new Error("无法连接查询服务");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   function queue(delay = 700) {
     render();
     clearTimeout(state.timer);
@@ -529,7 +558,7 @@
     render();
   }
 
-  window.MotJusteSync = { init, queue, syncNow, render, networkChanged, onLocalReset };
+  window.MotJusteSync = { init, queue, syncNow, lookupFrench, render, networkChanged, onLocalReset };
   window.MotJusteSyncTest = { mergeDatasets, recomputeSrs, cloudWord, cloudReview, serializeWord, serializeReview };
   document.addEventListener("motjuste:ready", () => init().catch(console.error), { once: true });
 })();

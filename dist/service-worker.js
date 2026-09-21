@@ -1,4 +1,4 @@
-const CACHE_NAME = "mot-juste-shell-v3";
+const CACHE_NAME = "mot-juste-shell-v4";
 const APP_SHELL = ["./", "./index.html", "./style.css", "./supabase-config.js", "./app.js", "./sync.js", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (event) => {

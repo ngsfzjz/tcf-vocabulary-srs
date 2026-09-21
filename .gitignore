@@ -1,0 +1,6 @@
+# Never commit Edge Function secrets or local credentials.
+.env
+.env.*
+supabase/functions/.env
+supabase/.branches/
+supabase/.temp/

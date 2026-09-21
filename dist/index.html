@@ -68,10 +68,23 @@
             <h1 id="addTitle">极速加词</h1>
           </div>
           <label class="field-label" for="frenchInput">法语词 / 词组</label>
-          <input id="frenchInput" name="french" class="main-input" type="text" lang="fr" autocapitalize="none" spellcheck="true" enterkeyhint="next" required placeholder="例如：prendre en compte">
-          <label class="field-label" for="chineseInput">中文释义</label>
-          <textarea id="chineseInput" name="chinese" class="main-input" rows="3" enterkeyhint="done" required placeholder="例如：考虑到，把……纳入考虑"></textarea>
-          <button id="addWordBtn" class="primary-btn jumbo" type="submit">添加</button>
+          <input id="frenchInput" name="french" class="main-input" type="text" lang="fr" autocapitalize="none" spellcheck="true" enterkeyhint="go" required placeholder="例如：prendre en compte">
+          <button id="lookupBtn" class="primary-btn jumbo" type="submit">自动查询</button>
+          <section id="lookupPreview" class="lookup-preview" aria-label="查询结果" hidden>
+            <div class="lookup-preview-head"><strong>查询结果</strong><span id="lookupTerm"></span></div>
+            <label class="field-label" for="chineseInput">中文释义</label>
+            <textarea id="chineseInput" name="chinese" class="main-input" rows="2" placeholder="可修改释义，或查询失败后手动填写"></textarea>
+            <div id="lookupDetails" class="lookup-details" hidden>
+              <div><small>词性</small><strong id="lookupPartOfSpeech"></strong></div>
+              <div><small>常见搭配</small><strong id="lookupCollocation" lang="fr"></strong></div>
+            </div>
+            <div class="lookup-actions">
+              <button id="confirmAddBtn" class="primary-btn" type="button">确认添加</button>
+              <button id="editLookupBtn" class="secondary-btn" type="button">手动修改</button>
+              <button id="retryLookupBtn" class="secondary-btn" type="button">重新查询</button>
+            </div>
+          </section>
+          <button id="manualAddBtn" class="text-btn manual-add-link" type="button">查询失败或离线？手动填写中文</button>
           <p id="addFeedback" class="form-feedback" role="status" aria-live="polite"></p>
         </form>
       </section>

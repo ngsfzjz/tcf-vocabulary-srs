@@ -133,6 +133,20 @@ main { padding: 22px 16px calc(var(--nav-height) + 30px + env(safe-area-inset-bo
 .main-input::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 .main-input:focus { border-color: var(--blue); }
 .jumbo { min-height: 66px; font-size: 1.08rem; }
+.lookup-preview { margin-top: 16px; padding: 17px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
+.lookup-preview[hidden], .lookup-details[hidden] { display: none; }
+.lookup-preview-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.lookup-preview-head span { color: var(--muted); overflow-wrap: anywhere; text-align: right; }
+.lookup-preview .main-input { margin-bottom: 14px; min-height: 86px; font-size: 1rem; }
+.lookup-details { display: grid; gap: 9px; margin: 2px 0 16px; }
+.lookup-details div { padding: 10px 12px; border-radius: 12px; background: var(--surface-2); overflow-wrap: anywhere; }
+.lookup-details small, .lookup-details strong { display: block; }
+.lookup-details small { color: var(--muted); font-size: .73rem; }
+.lookup-details strong { margin-top: 2px; font-size: .9rem; }
+.lookup-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.lookup-actions button { min-height: 50px; }
+.lookup-actions .primary-btn { grid-column: 1 / -1; }
+.manual-add-link { align-self: center; margin-top: 9px; }
 .form-feedback { min-height: 26px; margin: 11px 0 0; color: var(--muted); font-size: .85rem; text-align: center; }
 .form-feedback.success { color: var(--green); }
 .form-feedback.error { color: var(--red); }
